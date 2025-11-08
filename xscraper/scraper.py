@@ -17,9 +17,10 @@ from .checkpoint_manager import CheckpointManager
 
 
 class XScraper:
-    
-    def __init__(self, config_path: str = "config.ini"):
-        self.config_manager = ConfigManager(config_path)
+
+    def __init__(self, config_path: str = "config.ini", guest_mode: bool = False):
+        self.guest_mode = guest_mode
+        self.config_manager = ConfigManager(config_path, guest_mode=guest_mode)
         self.logger = self._setup_logging()
         
         self.twitter_session: Optional[TwitterSession] = None
@@ -73,23 +74,27 @@ class XScraper:
     
     def _initialize_components(self) -> None:
         try:
-            credentials = self.config_manager.get_twitter_credentials()
-            
-            if not credentials.get('username'):
-                self.logger.error("No Twitter account configured in config.ini")
-                raise RuntimeError("Please configure a Twitter account in [TWITTER] section")
-            
-            username = credentials['username']
-            email = credentials['email']
-            password = credentials['password']
-            
-            self.twitter_session = TwitterSession(
-                username=username,
-                email=email,
-                password=password,
-                twitter_settings={}
-            )
-            self.logger.info(f"Initialized Twitter session for @{username}")
+            # Skip Twitter credentials for guest mode
+            if not self.guest_mode:
+                credentials = self.config_manager.get_twitter_credentials()
+
+                if not credentials.get('username'):
+                    self.logger.error("No Twitter account configured in config.ini")
+                    raise RuntimeError("Please configure a Twitter account in [TWITTER] section")
+
+                username = credentials['username']
+                email = credentials['email']
+                password = credentials['password']
+
+                self.twitter_session = TwitterSession(
+                    username=username,
+                    email=email,
+                    password=password,
+                    twitter_settings={}
+                )
+                self.logger.info(f"Initialized Twitter session for @{username}")
+            else:
+                self.logger.info("Initialized scraper in guest mode - no Twitter login required")
             
             
             proxy_settings = self.config_manager.get_proxy_settings()
@@ -414,7 +419,99 @@ class XScraper:
         finally:
             self.is_running = False
             self.session_stats['end_time'] = time.time()
-    
+
+    async def scrape_user_tweets_guest(self, username: str, max_tweets: int = 50,
+                                      analyze: bool = False, analysis_types: Optional[List[str]] = None) -> Dict[str, Any]:
+        """
+        Scrape user tweets in guest mode (no login required).
+
+        Args:
+            username: Twitter username to scrape (without @)
+            max_tweets: Maximum number of tweets to scrape
+            analyze: Whether to perform AI analysis
+            analysis_types: Types of analysis to perform
+
+        Returns:
+            Dictionary containing scraped tweets and metadata
+        """
+        self.session_stats['start_time'] = time.time()
+        self.is_running = True
+
+        try:
+            self.logger.info(f"Starting guest scraping for @{username}")
+
+            # Initialize playwright scraper in guest mode
+            scraping_settings = self.config_manager.get_scraping_settings()
+            timeout_settings = self.config_manager.get_timeout_settings()
+            proxy_settings = self.config_manager.get_proxy_settings()
+
+            if not self.playwright_scraper:
+                self.playwright_scraper = PlaywrightScraper(
+                    guest_mode=True,
+                    scraping_config=scraping_settings,
+                    timeout_config=timeout_settings,
+                    proxy_config=proxy_settings if proxy_settings.get('enable_proxy_rotation') else None,
+                    progress_manager=self.progress_manager
+                )
+                await self.playwright_scraper.initialize()
+
+            # Perform guest scraping
+            scrape_result = await self.playwright_scraper.scrape_user_tweets_guest(username, max_tweets)
+
+            if 'error' in scrape_result:
+                self.logger.error(f"Guest scraping error: {scrape_result['error']}")
+                return scrape_result
+
+            tweets = scrape_result.get('tweets', [])
+            self.scraped_tweets = tweets
+            self.session_stats['tweets_scraped'] = len(tweets)
+
+            self.logger.info(f"Guest scraping completed: {len(tweets)} tweets")
+
+            # Perform AI analysis if requested
+            analysis_result = None
+            if analyze and self.ai_analyzer and tweets:
+                try:
+                    self.logger.info("Starting AI analysis...")
+                    analysis_types = analysis_types or ['sentiment', 'topics']
+                    analysis_result = await self.ai_analyzer.analyze_tweets(tweets, analysis_types)
+                    self.session_stats['analyses_performed'] = len(analysis_types)
+                    self.logger.info("AI analysis completed")
+                except Exception as e:
+                    self.logger.error(f"AI analysis failed: {e}")
+                    self.session_stats['errors_encountered'] += 1
+
+            # Build final result
+            result = {
+                'username': username,
+                'user_data': scrape_result.get('user_data'),
+                'tweets': tweets,
+                'tweet_count': len(tweets),
+                'unique_tweet_count': len(set(tweet['id'] for tweet in tweets if tweet.get('id'))),
+                'scraping_duration': scrape_result.get('scraping_duration'),
+                'mode': 'guest',
+                'session_stats': self.session_stats
+            }
+
+            if analysis_result:
+                result['analysis'] = analysis_result
+
+            return result
+
+        except Exception as e:
+            self.logger.error(f"Guest scraping failed: {e}")
+            self.session_stats['errors_encountered'] += 1
+            return {
+                'error': str(e),
+                'username': username,
+                'tweets': [],
+                'mode': 'guest'
+            }
+
+        finally:
+            self.is_running = False
+            self.session_stats['end_time'] = time.time()
+
     def _apply_filters(self, tweets: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         filter_settings = self.config_manager.get_filter_settings()
         filtered_tweets = []

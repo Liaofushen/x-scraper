@@ -7,7 +7,7 @@ from datetime import datetime
 import click
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-from src.date_utils import parse_date_or_relative, generate_date_ranges
+from xscraper.date_utils import parse_date_or_relative, generate_date_ranges
 
 from .utils import run_scraper_command, parse_analysis_types, save_result_with_analysis
 

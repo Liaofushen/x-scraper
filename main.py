@@ -1,7 +1,7 @@
 import click
 from rich.console import Console
 
-from cli import user, search, search_historical, interactive, refresh_session
+from cli import user, search, search_historical, interactive, refresh_session, guest
 
 
 console = Console()
@@ -20,6 +20,7 @@ cli.add_command(search)
 cli.add_command(search_historical)
 cli.add_command(interactive)
 cli.add_command(refresh_session)
+cli.add_command(guest)
 
 
 def main() -> None:

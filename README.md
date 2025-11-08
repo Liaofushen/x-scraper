@@ -13,13 +13,29 @@
 
 Twitter/X scraper built with Playwright for browser automation and OpenAI for AI-powered tweet analysis.
 
+**Can be used as both a CLI tool and a Python SDK.**
+
+## Quick Start (SDK)
+
+Get started in 3 lines of code:
+
+```python
+from xscraper.sdk import get_latest_tweets
+
+tweets = get_latest_tweets('stable', count=10)
+print(f"Got {len(tweets)} tweets!")
+```
+
+**[📖 Full SDK Documentation](SDK_USAGE.md)**
+
 ## Features
 
 ### Core Scraping Capabilities
+- **Guest Mode Scraping**: Scrape public tweets without login (SDK: `get_latest_tweets()`)
 - **Timeline Scraping**: Extract tweets from any user's timeline with full metadata
 - **Historical Search**: Scrape tweets from specific date ranges
 - **Keyword Search**: Search for tweets by keywords, hashtags, or phrases
-- **Mixed Strategy**: Combine timeline + historical search for comprehensive coverage
+- **SDK & CLI**: Use as a Python library or command-line tool
 
 ### Advanced Features
 - **AI Analysis**: Automatic sentiment analysis, topic extraction, and summaries using ChatGPT
@@ -97,12 +113,17 @@ scroll_delay_min = 2.0
 scroll_delay_max = 5.0
 ```
 
-### Required Fields
-- `[TWITTER]`: username, email, password
-- `[SCRAPING]`: output_directory, max_tweets_per_session
+### Configuration Requirements by Mode
 
-### Optional Fields
-- `[AI]`: All fields (for AI analysis)
+**For Guest Mode (No Login):**
+- `[SCRAPING]`: output_directory (required)
+- `[AI]`: openai_api_key (optional, for AI analysis)
+
+**For Authenticated Modes (User, Search, Historical):**
+- `[TWITTER]`: username, email, password (required)
+- `[SCRAPING]`: output_directory, max_tweets_per_session (required)
+- `[AI]`: All fields (optional, for AI analysis)
+- `[PROXY]`: proxy settings (optional)
 
 ## Usage
 
@@ -118,13 +139,44 @@ Launches an interactive menu with guided options for all scraping modes.
 
 ### Command Line Interface
 
-#### 1. Scrape User Timeline
+#### 1. Guest Mode Scraping (No Login Required)
+
+```bash
+python main.py guest <username> [OPTIONS]
+
+# Example: Scrape 20 tweets from stable without login
+python main.py guest stable --max-tweets 20
+
+# Save to specific file
+python main.py guest stable --max-tweets 30 --output my_results.json
+
+# With AI analysis (requires OpenAI API key)
+python main.py guest stable --max-tweets 20 --analyze
+```
+
+**Options:**
+- `--max-tweets`: Maximum number of tweets to scrape (default: 50)
+- `--output`: Custom output file path
+- `--analyze/--no-analyze`: Enable AI analysis (default: disabled)
+- `--analysis-types`: Types of analysis (sentiment, topics, summary)
+
+**Advantages:**
+- ✅ No Twitter account or login required
+- ✅ Quick setup - only needs `[SCRAPING]` config section
+- ✅ Good for public tweets and quick data sampling
+
+**Limitations:**
+- ⚠️ Limited to first page (~20-50 tweets)
+- ⚠️ Cannot access protected accounts
+- ⚠️ No access to full timeline history
+
+#### 2. Scrape User Timeline (Authenticated)
 
 ```bash
 python main.py user <username> [OPTIONS]
 
 # Example: Scrape 500 tweets from FabrizioRomano
-python main.py user FabrizioRomano --max-tweets 500
+python main.py user stable --max-tweets 10
 
 # With AI analysis
 python main.py user FabrizioRomano --max-tweets 500 --analysis sentiment,topics,summary
@@ -139,7 +191,7 @@ python main.py user FabrizioRomano --max-tweets 500 --analysis sentiment,topics,
 - Produces roughly **800-1000 tweets**
 - For comprehensive coverage beyond this limit, use **historical search by date** (see below)
 
-#### 2. Keyword Search
+#### 3. Keyword Search
 
 ```bash
 python main.py search <query> [OPTIONS]
@@ -155,7 +207,7 @@ python main.py search "#TransferNews" --max-tweets 500 --analysis all
 - `--max-tweets`: Maximum number of tweets to scrape
 - `--analysis`: AI analysis types
 
-#### 3. Historical Search (Date Range)
+#### 4. Historical Search (Date Range)
 
 ```bash
 python main.py search-historical <username> --since YYYY-MM-DD --until YYYY-MM-DD [OPTIONS]

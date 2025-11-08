@@ -18,10 +18,11 @@ except ImportError:
 
 
 class PlaywrightScraper:
-    def __init__(self, username: str, password: str, email: str, scraping_config: Dict, timeout_config: Dict, proxy_config: Optional[Dict] = None, progress_manager=None):
+    def __init__(self, username: str = None, password: str = None, email: str = None, scraping_config: Dict = None, timeout_config: Dict = None, proxy_config: Optional[Dict] = None, progress_manager=None, guest_mode: bool = False):
         self.username = username
         self.password = password
         self.email = email
+        self.guest_mode = guest_mode
         self.proxy_config = proxy_config
         self.progress_manager = progress_manager
         self.logger = logging.getLogger(__name__)
@@ -37,14 +38,29 @@ class PlaywrightScraper:
         self.is_logged_in = False     
         self.current_username = None
         self.start_time: Optional[float] = None
-        self.scroll_delay_min = scraping_config['scroll_delay_min']
-        self.scroll_delay_max = scraping_config['scroll_delay_max']
-        self.max_scroll_attempts = scraping_config['max_scroll_attempts']
+
+        # Handle guest mode with default configs
+        if scraping_config:
+            self.scroll_delay_min = scraping_config['scroll_delay_min']
+            self.scroll_delay_max = scraping_config['scroll_delay_max']
+            self.max_scroll_attempts = scraping_config['max_scroll_attempts']
+            self.max_attempts_without_new = scraping_config['max_attempts_without_new']
+            self.overlap_threshold = scraping_config['overlap_detection_threshold']
+        else:
+            # Default values for guest mode
+            self.scroll_delay_min = 2.0
+            self.scroll_delay_max = 5.0
+            self.max_scroll_attempts = 10
+            self.max_attempts_without_new = 3
+            self.overlap_threshold = 0.8
+
         self.scroll_attempts_without_new = 0
-        self.max_attempts_without_new = scraping_config['max_attempts_without_new']
         self.max_tweets_per_session = None
-        self.overlap_threshold = scraping_config['overlap_detection_threshold']
-        self.timeouts = timeout_config
+        self.timeouts = timeout_config or {
+            'page_load_timeout': 30000,
+            'element_wait_timeout': 10000,
+            'short_wait_timeout': 2000
+        }
         
         self.logger.info("Playwright scraper initialized")
     
@@ -105,10 +121,14 @@ class PlaywrightScraper:
                 self.logger.info("No saved cookies found - will need to login")
             
             self.page = await self.context.new_page()
-            
-            
-            self.page.on("response", self._intercept_response)
-            
+
+            # Only enable API response interception in non-guest mode
+            if not self.guest_mode:
+                self.page.on("response", self._intercept_response)
+                self.logger.debug("API response interception enabled")
+            else:
+                self.logger.debug("Guest mode: API interception disabled, using DOM scraping only")
+
             self.logger.info("Playwright browser initialized successfully")
             return True
             
@@ -878,7 +898,293 @@ class PlaywrightScraper:
             
         except Exception as e:
             self.logger.error(f"Error saving tweets: {e}")
-    
+
+    async def scrape_user_tweets_guest(self, username: str, max_tweets: int = 50) -> Dict[str, Any]:
+        """
+        Scrape user tweets in guest mode (no login required).
+        Only scrapes the first page of tweets visible to guests.
+        """
+        if not self.page:
+            raise RuntimeError("Browser not initialized")
+
+        try:
+            self.current_username = username
+            self.start_time = time.time()
+            self.scraped_tweet_ids.clear()
+            self.all_tweets.clear()
+            self.user_data = None
+
+            self.logger.info(f"Starting guest scrape for @{username} (max: {max_tweets} tweets)")
+
+            # Navigate to user's X profile
+            profile_url = f'https://x.com/{username}'
+            await self.page.goto(profile_url,
+                               wait_until='domcontentloaded',
+                               timeout=60000)  # 60 second timeout
+
+            # Check if profile exists and is accessible
+            try:
+                # Look for the main tweet container
+                await self.page.wait_for_selector('[data-testid="primaryColumn"]',
+                                                timeout=self.timeouts['element_wait_timeout'])
+            except Exception:
+                self.logger.error(f"Could not find profile for @{username} or profile is private/suspended")
+                return {
+                    'error': f'Profile @{username} not found or not accessible',
+                    'username': username,
+                    'tweets': []
+                }
+
+            # Wait for tweets to load
+            try:
+                await self.page.wait_for_selector('article[data-testid="tweet"]',
+                                                 timeout=10000)
+                await asyncio.sleep(3)  # Additional wait for dynamic content
+            except Exception:
+                self.logger.warning("No tweets found or timeout waiting for tweets")
+
+            # Extract user information from page
+            try:
+                user_info = await self._extract_user_info_from_page()
+                self.user_data = user_info
+            except Exception as e:
+                self.logger.warning(f"Could not extract user info: {e}")
+                self.user_data = {'username': username, 'display_name': username}
+
+            # Scroll and collect tweets from first page
+            tweets_collected = 0
+            scroll_attempts = 0
+            max_scroll_attempts = 3  # Limited scrolling for guest mode
+
+            while tweets_collected < max_tweets and scroll_attempts < max_scroll_attempts:
+                initial_count = len(self.all_tweets)
+
+                # Extract tweets from current view
+                await self._extract_tweets_from_page()
+
+                tweets_collected = len(self.all_tweets)
+                self.logger.info(f"Collected {tweets_collected} tweets so far")
+
+                if tweets_collected >= max_tweets:
+                    break
+
+                # Check if we got new tweets
+                if len(self.all_tweets) == initial_count:
+                    scroll_attempts += 1
+                    self.logger.info(f"No new tweets found, scroll attempt {scroll_attempts}")
+                else:
+                    scroll_attempts = 0  # Reset if we found new tweets
+
+                # Scroll down to load more tweets
+                await self.page.evaluate('window.scrollBy(0, window.innerHeight)')
+                await asyncio.sleep(random.uniform(2, 4))
+
+            # Limit to max_tweets
+            if len(self.all_tweets) > max_tweets:
+                self.all_tweets = self.all_tweets[:max_tweets]
+
+            end_time = time.time()
+            duration = round(end_time - self.start_time, 2)
+
+            result = {
+                'username': username,
+                'user_data': self.user_data,
+                'tweets': self.all_tweets,
+                'tweet_count': len(self.all_tweets),
+                'unique_tweet_count': len(set(tweet['id'] for tweet in self.all_tweets if tweet.get('id'))),
+                'scraping_duration': duration,
+                'mode': 'guest'
+            }
+
+            self.logger.info(f"Guest scraping completed: {len(self.all_tweets)} tweets in {duration}s")
+            return result
+
+        except Exception as e:
+            self.logger.error(f"Error in guest scraping: {e}")
+            return {
+                'error': str(e),
+                'username': username,
+                'tweets': self.all_tweets,
+                'mode': 'guest'
+            }
+
+    async def _extract_user_info_from_page(self) -> Dict[str, Any]:
+        """Extract user information from the profile page"""
+        user_info = {}
+
+        try:
+            # Extract display name
+            display_name_elem = await self.page.query_selector('[data-testid="UserName"] span')
+            if display_name_elem:
+                user_info['display_name'] = await display_name_elem.inner_text()
+
+            # Extract bio
+            bio_elem = await self.page.query_selector('[data-testid="UserDescription"]')
+            if bio_elem:
+                user_info['bio'] = await bio_elem.inner_text()
+
+            # Extract follower/following counts (if visible)
+            try:
+                followers_elem = await self.page.query_selector('a[href*="/followers"] span')
+                if followers_elem:
+                    followers_text = await followers_elem.inner_text()
+                    user_info['followers_text'] = followers_text
+            except:
+                pass
+
+            try:
+                following_elem = await self.page.query_selector('a[href*="/following"] span')
+                if following_elem:
+                    following_text = await following_elem.inner_text()
+                    user_info['following_text'] = following_text
+            except:
+                pass
+
+            return user_info
+
+        except Exception as e:
+            self.logger.warning(f"Error extracting user info: {e}")
+            return {}
+
+    async def _extract_tweets_from_page(self):
+        """Extract tweets from the current page view"""
+        try:
+            # Look for tweet articles
+            tweet_elements = await self.page.query_selector_all('article[data-testid="tweet"]')
+            self.logger.info(f"Found {len(tweet_elements)} tweet elements on page")
+
+            for tweet_elem in tweet_elements:
+                try:
+                    # Try to extract the real tweet ID from the link
+                    tweet_id = None
+                    try:
+                        # Look for the tweet link which contains the ID
+                        time_elem = await tweet_elem.query_selector('time')
+                        if time_elem:
+                            parent_link = await time_elem.evaluate_handle('el => el.closest("a")')
+                            if parent_link:
+                                href = await parent_link.evaluate('el => el.href')
+                                if href and '/status/' in href:
+                                    tweet_id = href.split('/status/')[-1].split('?')[0].split('/')[0]
+                    except:
+                        pass
+
+                    # Extract tweet text
+                    text_elem = await tweet_elem.query_selector('[data-testid="tweetText"]')
+                    tweet_text = ""
+                    if text_elem:
+                        tweet_text = await text_elem.inner_text()
+
+                    # Check if this is a media-only tweet
+                    has_media = False
+                    try:
+                        media_elem = await tweet_elem.query_selector('[data-testid="tweetPhoto"], [data-testid="videoPlayer"]')
+                        has_media = media_elem is not None
+                    except:
+                        pass
+
+                    # If no text but has media, mark it as media tweet
+                    if not tweet_text or not tweet_text.strip():
+                        if has_media:
+                            tweet_text = "[Media tweet - no text]"
+                        elif not tweet_id:
+                            # Skip if no text, no media, and no ID (likely a placeholder)
+                            self.logger.debug("Skipping tweet with no text, no media, and no ID")
+                            continue
+                        else:
+                            # Has ID but no text/media - might be a quote tweet or thread continuation
+                            tweet_text = "[Tweet with no text content]"
+
+                    # Extract tweet time/date
+                    time_elem = await tweet_elem.query_selector('time')
+                    tweet_time = ""
+                    if time_elem:
+                        tweet_time = await time_elem.get_attribute('datetime')
+
+                    # If we still don't have an ID, create one from content and time
+                    if not tweet_id:
+                        tweet_id = f"guest_{abs(hash(tweet_text + tweet_time))}"
+
+                    # Skip if we already have this tweet
+                    if tweet_id in self.scraped_tweet_ids:
+                        self.logger.debug(f"Skipping duplicate tweet ID: {tweet_id}")
+                        continue
+
+                    # Extract engagement metrics
+                    metrics = {}
+                    try:
+                        # Replies
+                        reply_elem = await tweet_elem.query_selector('[data-testid="reply"]')
+                        if reply_elem:
+                            reply_text = await reply_elem.inner_text()
+                            metrics['reply_count'] = self._parse_metric(reply_text)
+
+                        # Retweets
+                        retweet_elem = await tweet_elem.query_selector('[data-testid="retweet"]')
+                        if retweet_elem:
+                            retweet_text = await retweet_elem.inner_text()
+                            metrics['retweet_count'] = self._parse_metric(retweet_text)
+
+                        # Likes
+                        like_elem = await tweet_elem.query_selector('[data-testid="like"]')
+                        if like_elem:
+                            like_text = await like_elem.inner_text()
+                            metrics['favorite_count'] = self._parse_metric(like_text)
+                    except:
+                        pass
+
+                    tweet_data = {
+                        'id': tweet_id,
+                        'text': tweet_text,
+                        'created_at': tweet_time,
+                        'user': self.user_data or {'username': self.current_username},
+                        'metrics': metrics,
+                        'is_retweet': False,  # We'll detect this later if needed
+                        'is_reply': False,    # We'll detect this later if needed
+                        'hashtags': self._extract_hashtags(tweet_text),
+                        'urls': self._extract_urls(tweet_text),
+                        'media': [],  # Media extraction can be added later
+                        'scraped_via': 'guest_mode'
+                    }
+
+                    self.all_tweets.append(tweet_data)
+                    self.scraped_tweet_ids.add(tweet_id)
+
+                except Exception as e:
+                    self.logger.debug(f"Error extracting individual tweet: {e}")
+                    continue
+
+        except Exception as e:
+            self.logger.error(f"Error extracting tweets from page: {e}")
+
+    def _parse_metric(self, text: str) -> int:
+        """Parse engagement metrics from text (e.g., '1.2K' -> 1200)"""
+        try:
+            text = text.strip()
+            if not text or text == '':
+                return 0
+
+            # Handle K, M suffixes
+            if text.endswith('K'):
+                return int(float(text[:-1]) * 1000)
+            elif text.endswith('M'):
+                return int(float(text[:-1]) * 1000000)
+            else:
+                return int(text)
+        except:
+            return 0
+
+    def _extract_hashtags(self, text: str) -> list:
+        """Extract hashtags from tweet text"""
+        import re
+        return re.findall(r'#\w+', text)
+
+    def _extract_urls(self, text: str) -> list:
+        """Extract URLs from tweet text"""
+        import re
+        url_pattern = r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
+        return re.findall(url_pattern, text)
+
     async def cleanup(self):
         try:
             if self.page:

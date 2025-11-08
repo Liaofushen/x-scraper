@@ -7,8 +7,8 @@ from datetime import datetime
 import click
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-from src import XScraper
-from src.exceptions import (
+from xscraper.scraper import XScraper
+from xscraper.exceptions import (
     XScraperError,
     AuthenticationError,
     RateLimitError,

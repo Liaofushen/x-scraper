@@ -9,9 +9,9 @@ from rich.panel import Panel
 from rich.prompt import Prompt, Confirm
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-from src import XScraper
-from src.ai_analyzer import AnalysisType
 
+from xscraper.ai_analyzer import AnalysisType
+from xscraper.scraper import XScraper
 
 console = Console()
 
@@ -164,7 +164,7 @@ Features:
         count = None
         resume = False
         
-        from src.checkpoint_manager import CheckpointManager
+        from xscraper.checkpoint_manager import CheckpointManager
         checkpoint_mgr = CheckpointManager()
         if checkpoint_mgr.has_checkpoint(username):
             checkpoint = checkpoint_mgr.load_checkpoint(username)
