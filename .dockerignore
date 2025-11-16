@@ -1,14 +1,35 @@
+# Python virtual environments
 venv/
+.venv/
+env/
+ENV/
+
+# Python cache
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 .pytest_cache/
+*.egg-info/
+
+# Git
 .git/
 .gitignore
+
+# Logs and data (will be mounted as volumes)
 *.log
 data/
 logs/
 playwright_cookies.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
 .DS_Store
 
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore

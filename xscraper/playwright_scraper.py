@@ -69,7 +69,7 @@ class PlaywrightScraper:
             self.playwright = await async_playwright().start()
             
             browser_args = {
-                'headless': False, 
+                'headless': True, 
                 'args': [
                     '--disable-blink-features=AutomationControlled',
                     '--disable-dev-shm-usage',

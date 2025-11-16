@@ -1,0 +1,89 @@
+version: '3.8'
+
+services:
+  x-scraper:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # Enable BuildKit for cache support
+      args:
+        BUILDKIT_INLINE_CACHE: 1
+    container_name: x-scraper
+    # Override entrypoint if needed
+    # command: ["uv", "run", "python", "main.py", "--help"]
+    
+    volumes:
+      # Mount all project files except .venv
+      - ./xscraper:/app/xscraper
+      - ./cli:/app/cli
+      - ./examples:/app/examples
+      - ./main.py:/app/main.py
+      - ./demo_guest_mode.py:/app/demo_guest_mode.py
+      - ./test_sdk.py:/app/test_sdk.py
+      - ./config.ini.template:/app/config.ini.template
+      
+      # Mount data directories (persistent)
+      - ./data:/app/data
+      - ./logs:/app/logs
+      
+      # Mount config if exists
+      - ./config.ini:/app/config.ini:ro
+      
+      # Mount cookies if exists (optional)
+      - ./playwright_cookies.json:/app/playwright_cookies.json
+    
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+    
+    # Shared memory size for Chromium
+    shm_size: '2gb'
+    
+    # Network mode (optional, uncomment if needed)
+    # network_mode: "host"
+    
+    # Restart policy
+    restart: unless-stopped
+    
+    # Resource limits (optional, adjust as needed)
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '2'
+    #       memory: 4G
+    #     reservations:
+    #       cpus: '1'
+    #       memory: 2G
+
+  # Interactive mode for guest scraping (no login required)
+  x-scraper-guest:
+    extends: x-scraper
+    container_name: x-scraper-guest
+    command: ["uv", "run", "python", "main.py", "guest", "stable", "--max-tweets", "20"]
+    restart: "no"
+    profiles:
+      - guest
+
+  # Interactive mode with terminal access (requires login)
+  x-scraper-interactive:
+    extends: x-scraper
+    container_name: x-scraper-interactive
+    entrypoint: ["uv", "run", "python", "main.py"]
+    command: ["interactive"]
+    stdin_open: true
+    tty: true
+    restart: "no"
+    profiles:
+      - interactive
+
+  # Development mode with bash shell
+  x-scraper-dev:
+    extends: x-scraper
+    container_name: x-scraper-dev
+    entrypoint: ["/bin/bash"]
+    stdin_open: true
+    tty: true
+    restart: "no"
+    profiles:
+      - dev
+
