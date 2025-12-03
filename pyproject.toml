@@ -1,6 +1,6 @@
 [project]
 name = "x-scraper"
-version = "0.1.0"
+version = "1.1.0"
 description = "Advanced X (Twitter) scraper with proxy rotation and AI integration"
 readme = "README.md"
 requires-python = ">=3.11,<=3.12"

@@ -56,14 +56,9 @@ class XScraperClient:
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Exit context manager and cleanup resources"""
         if self.scraper and self.scraper.playwright_scraper:
-            # Run cleanup in event loop
             try:
                 loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    # Create a task for cleanup
-                    asyncio.create_task(self.scraper.playwright_scraper.cleanup())
-                else:
-                    loop.run_until_complete(self.scraper.playwright_scraper.cleanup())
+                loop.run_until_complete(self.scraper.playwright_scraper.cleanup())
             except Exception as e:
                 logging.warning(f"Error during cleanup: {e}")
 
